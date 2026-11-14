@@ -44,15 +44,26 @@ RUN --mount=type=cache,id=grok2api-go-mod,target=/go/pkg/mod,sharing=locked \
     go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/grok2api ./cmd/grok2api
 
 
+FROM alpine:${ALPINE_VERSION} AS registration-builder
+
+RUN apk add --no-cache python3 py3-pip python3-dev build-base libffi-dev openssl-dev
+COPY registration/requirements.txt /tmp/registration-requirements.txt
+RUN python3 -m venv /app/registration/.venv && \
+    /app/registration/.venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /app/registration/.venv/bin/pip install --no-cache-dir -r /tmp/registration-requirements.txt
+
+
 FROM alpine:${ALPINE_VERSION}
 
 ENV TZ=Asia/Shanghai \
-    GROK2API_CONFIG_SOURCE=/run/grok2api/config.yaml
+    GROK2API_CONFIG_SOURCE=/run/grok2api/config.yaml \
+    DISPLAY=:99
 
-RUN apk add --no-cache 'ca-certificates-bundle>=20261020-r0' ca-certificates su-exec tzdata && \
+RUN apk add --no-cache 'ca-certificates-bundle>=20261020-r0' ca-certificates su-exec tzdata \
+      python3 chromium chromium-chromedriver xvfb font-noto-cjk dbus lsof && \
     addgroup -S -g 10001 grok2api && \
     adduser -S -D -H -u 10001 -G grok2api grok2api && \
-    mkdir -p /app/data /run/grok2api /var/lib/grok2api-quality-guard && \
+    mkdir -p /app/data/registration /run/grok2api /var/lib/grok2api-quality-guard && \
     chown -R grok2api:grok2api \
       /app/data \
       /run/grok2api \
@@ -63,6 +74,8 @@ WORKDIR /app
 
 COPY --from=backend-builder --chmod=0755 /out/grok2api /app/grok2api
 COPY --from=frontend-builder /src/frontend/dist /app/frontend/dist
+COPY registration /app/registration
+COPY --from=registration-builder /app/registration/.venv /app/registration/.venv
 COPY VERSION /app/VERSION
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/grok2api-entrypoint
 

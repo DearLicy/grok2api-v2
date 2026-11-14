@@ -37,6 +37,8 @@ Thumbs.db
 # Python
 __pycache__/
 *.py[cod]
+/registration/.venv/
+/registration/config.json
 
 # Frontend
 /.pnpm-store/

@@ -18,4 +18,5 @@ cp "${GROK2API_CONFIG_SOURCE}" /app/config.yaml
 chown grok2api:grok2api /app/config.yaml
 chmod 0600 /app/config.yaml
 
-exec su-exec grok2api:grok2api "$@"
+exec su-exec grok2api:grok2api \
+  xvfb-run -a -s "-screen 0 1440x900x24 -nolisten tcp" "$@"

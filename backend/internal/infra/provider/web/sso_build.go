@@ -162,7 +162,7 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 	if status == http.StatusForbidden && isBrowserVerificationRequired(approveBody) {
 		// Observed 2026-10-20: approve now demands a Castle browser token that only
 		// the consent page's script can produce. Not an SSO failure.
-		return provider.CredentialSeed{}, fmt.Errorf("%w: xAI 要求浏览器校验后才能批准授权，请改用 Device OAuth 在浏览器中手动完成", errBrowserVerificationRequired)
+		return provider.CredentialSeed{}, fmt.Errorf("%w: xAI 要求浏览器校验后才能批准授权", provider.ErrBrowserVerificationRequired)
 	}
 	if status < 200 || status >= 400 {
 		return provider.CredentialSeed{}, fmt.Errorf("SSO 自动批准 Device Flow 失败: %w", conversionHTTPError{status: status})
@@ -550,10 +550,6 @@ func firstValue(values ...string) string {
 	}
 	return ""
 }
-
-// errBrowserVerificationRequired reports that xAI refused the automated
-// device approval because it requires an interactive browser check.
-var errBrowserVerificationRequired = errors.New("xAI device approval requires browser verification")
 
 func isBrowserVerificationRequired(body []byte) bool {
 	text := strings.ToLower(string(body))

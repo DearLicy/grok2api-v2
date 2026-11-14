@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/chenyme/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/DearLicy/grok2api-v2/pkgs/container/grok2api-v2"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -134,7 +134,7 @@ The Gateway routes requests through the Provider Registry. Account Sync refreshe
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | APIs       | Responses, Chat Completions, Anthropic Messages, Images, and asynchronous Videos                                                        |
 | Clients    | Codex, Claude Code, OpenAI-compatible SDKs, and Anthropic-compatible SDKs                                                               |
-| Accounts   | Bulk import/export, quota sync, credential renewal, conversion, tools, and cleanup                                                      |
+| Accounts   | Integrated registration, encrypted vault, relogin ingestion, bulk import/export, quota sync, credential renewal, conversion, tools, and cleanup |
 | Routing    | Model discovery, Provider pinning, sticky sessions, quota/concurrency guards, and bounded failover                                      |
 | Sessions   | Stored responses, compact, prompt-cache affinity, and optional reasoning replay                                                         |
 | Media      | Image generation/editing, video jobs, local archiving, and URL/Base64/SSE output                                                        |
@@ -161,8 +161,8 @@ Each Provider keeps its own credentials, quota, health, cooldown, concurrency, a
 Official images support `linux/amd64` and `linux/arm64`.
 
 ```bash
-git clone https://github.com/chenyme/grok2api.git
-cd grok2api
+git clone https://github.com/DearLicy/grok2api-v2.git
+cd grok2api-v2
 cp config.example.yaml config.yaml
 ```
 
@@ -186,8 +186,7 @@ bootstrapAdmin:
 Start the service:
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f grok2api
 ```
 
@@ -238,6 +237,19 @@ Build refresh tokens may rotate when renewed. Do not actively share one Build cr
 Web account tools can accept the terms, set a random birthday corresponding to an age of 20–40, and enable NSFW. Completed steps are recorded and skipped on later runs.
 
 Automatic deletion of old `reauthRequired` accounts is available but disabled by default. Active inference leases and video jobs are protected.
+
+### Integrated registration engine
+
+The **Registration** page manages a Python worker launched and authenticated by the same Go process. The worker listens only on a random loopback port with a process-scoped bearer token, so there is no separate service, public worker port, or reconnect step.
+
+- A batch uses one reusable Chromium process and a disposable incognito browser context per account. The context closes immediately after post-processing, and the browser closes when the task ends.
+- The browser list contains installed Chrome, Edge, Brave, or Chromium builds. Safari is intentionally not listed because Apple does not provide the remote-control protocol this flow requires.
+- Protocol registration uses gRPC-Web first. The browser is opened only for explicitly enabled safe fallback before account creation; an uncertain result is never replayed.
+- Successful accounts are ingested into Grok Web, Build, and Console. Build uses the pure HTTP approval path first and performs at most one browser OAuth fallback when xAI explicitly requires browser verification.
+- The local vault encrypts email, password, and SSO with AES-GCM. TXT, CSV, and JSON import/export are supported, and relogin runs sequentially without a fixed batch cap.
+- Relogin checks Grok2API first and skips accounts that already exist in all three channels.
+
+Registration settings, the encrypted vault, and task-scoped SQLite logs live under the persistent data directory. Docker includes Python, Chromium, Chromedriver, Xvfb, and all Worker dependencies, and forces the Worker to use that bundled Chromium; the host does not need Chrome, Edge, or another browser installed. For source runs, install `registration/requirements.txt` into the interpreter selected by `GROK2API_REGISTRATION_PYTHON`.
 
 > [!TIP]
 > To migrate from the Python version, export Grok Web SSO tokens as TXT and import them under **Grok Web**. Old pool metadata and databases are not compatible.
@@ -372,14 +384,13 @@ Egress nodes are scoped to Build, Web, Console, or Web assets. The admin console
 - Fallback per scope: none, direct, or a fixed node
 - Proxy-pool mode without global cooldown after one connection failure
 - Immediate recovery probes after fixed-proxy transport failures, with per-node coalescing and bounded waiting for fast retry
-- Optional [Egress Quality Guard](./tools/egress-quality-guard/README.md) for active per-node model probes, guarded quarantine, and recovery; enable it with the built-in `quality-guard` Compose profile
+- Default-enabled [Egress Quality Guard](./tools/egress-quality-guard/README.md) for active per-node model probes, guarded quarantine, and recovery
 - Nodes whose proxy username contains `{account}` are treated as lease-scoped: a passive anomaly temporarily removes only the audited account lease, then recovery pins the probe to that same account and node. An unhealthy probe renews the hold; an expired hold no longer blocks routing if the sidecar is unavailable, so stale guard state cannot strand an account indefinitely. The shared node is never disabled and the rendered proxy identity is never exposed. Ordinary fixed sticky sessions can still be managed as separate nodes
 
 Hysteria and TUIC are not supported yet. FlareSolverr accepts only HTTP/SOCKS proxy URLs, so automatic clearance refresh cannot use a tunnel share URL directly.
 
-To enable the guard, add a `qualityGuard` section to `config.yaml`, then start
-the profile. The main service creates and reuses a non-exportable system probe
-identity automatically:
+The guard is part of the default Compose stack. The main service creates and
+reuses a non-exportable system probe identity automatically:
 
 ```yaml
 qualityGuard:
@@ -401,22 +412,22 @@ qualityGuard:
     idleAccountCooldown: 15m
 ```
 
-`requestRetry` runs on the gateway request path and is independent of the sidecar. The example above explicitly enables it; built-in defaults and `config.example.yaml` leave both `enabled` and `autoDisable` off. Either switch enables request-path quality checks and retries. A thinking-model stream with enough visible output and no streamed reasoning is **not delivered**; another account is tried. `autoDisable: true` disables an account on the first confirmed missing-thinking or degraded output-speed hit (soft-TPS, hard-TPS, or buffered-burst). The Account Maintenance switch controls `autoDisable`; turning it off restores the YAML `requestRetry.enabled` policy. If every attempt still has no reasoning, `onExhausted` either returns `503 quality_degraded` or delivers the last body. Context compaction is exempt from both missing-thinking and output-speed account penalties. Image, video, stored-response, and ForcedEgress probe requests are unchanged. Grok TUI tool turns stay held so 0-thinking dumps cannot skip the gate.
+`requestRetry` runs on the gateway request path and is independent of the sidecar. The example above explicitly enables it; built-in defaults and `config.example.yaml` leave `requestRetry.enabled` and `autoDisable` off so request bodies are not intercepted without an explicit policy choice. Either switch enables request-path quality checks and retries. A thinking-model stream with enough visible output and no streamed reasoning is **not delivered**; another account is tried. `autoDisable: true` disables an account on the first confirmed missing-thinking or degraded output-speed hit (soft-TPS, hard-TPS, or buffered-burst). The Account Maintenance switch controls `autoDisable`; turning it off restores the YAML `requestRetry.enabled` policy. If every attempt still has no reasoning, `onExhausted` either returns `503 quality_degraded` or delivers the last body. Context compaction is exempt from both missing-thinking and output-speed account penalties. Image, video, stored-response, and ForcedEgress probe requests are unchanged. Grok TUI tool turns stay held so 0-thinking dumps cannot skip the gate.
 
 ```bash
-docker compose --profile quality-guard up -d --build
+docker compose up -d --build
 ```
 
 Existing preview deployments that still contain `clientKeyID` can upgrade
 directly. The field is accepted for compatibility but ignored and can be
 removed; any manually created probe key is intentionally left untouched.
 
-After changing this configuration, run `docker compose --profile quality-guard restart grok2api egress-quality-guard` to reload the base settings; policy edits made in the admin page still hot-reload.
+After changing this configuration, run `docker compose restart grok2api egress-quality-guard` to reload the base settings; policy edits made in the admin page still hot-reload.
 
-The normal `docker compose up -d` command does not start the guard or generate
-probe traffic. The sidecar receives a narrowly scoped internal credential from
-the main service and never stores or uses the administrator password. See the
-linked guide before enabling automatic quarantine.
+`docker compose stop egress-quality-guard` keeps the main API available while
+stopping active probes. The sidecar receives a narrowly scoped internal
+credential from the main service and never stores or uses the administrator
+password. See the linked guide before enabling automatic quarantine.
 
 Resin usernames can contain `{account}`:
 
@@ -426,13 +437,14 @@ socks5h://Default.{account}:RESIN_PROXY_TOKEN@resin:2260
 
 The placeholder becomes a stable anonymous identity. Linked Web, Build, and Console accounts can share it; raw tokens and email addresses are not used.
 
-For managed Web/Console Cloudflare Clearance:
+Compose includes FlareSolverr by default and `config.example.yaml` points
+managed Web/Console Clearance at `http://flaresolverr:8191`:
 
 ```bash
-docker compose --profile flaresolverr up -d
+docker compose up -d
 ```
 
-Then use `http://flaresolverr:8191` under **Runtime Settings → Media & Network → Clearance** and select one of the managed modes:
+When running from source without Compose, launch FlareSolverr separately or override the URL under **Runtime Settings → Media & Network → Clearance**, then select one of the managed modes:
 
 - `FlareSolverr` proactively refreshes stale fixed-egress Clearance on the configured schedule.
 - `On demand` keeps the last successful Clearance regardless of age and solves again only after an upstream rejection explicitly invalidates it. Scheduled refresh does not launch a browser in this mode.

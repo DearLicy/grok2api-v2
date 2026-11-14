@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	latestReleaseAPI = "https://api.github.com/repos/chenyme/grok2api/releases/latest"
+	latestReleaseAPI = "https://api.github.com/repos/DearLicy/grok2api-v2/releases/latest"
 	maxReleaseBytes  = 1 << 20
 	maxNotesRunes    = 4096
 )
@@ -155,7 +155,7 @@ func (s *Service) fetchLatest(ctx context.Context) (latestRelease, error) {
 	}
 	return latestRelease{
 		Tag:   payload.Tag,
-		URL:   "https://github.com/chenyme/grok2api/releases/tag/" + url.PathEscape(payload.Tag),
+		URL:   "https://github.com/DearLicy/grok2api-v2/releases/tag/" + url.PathEscape(payload.Tag),
 		Notes: truncateRunes(strings.TrimSpace(payload.Body), maxNotesRunes),
 	}, nil
 }

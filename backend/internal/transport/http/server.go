@@ -17,8 +17,10 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
+	registrationapp "github.com/chenyme/grok2api/backend/internal/application/registration"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
+	registrationinfra "github.com/chenyme/grok2api/backend/internal/infra/registration"
 	accounthttp "github.com/chenyme/grok2api/backend/internal/transport/http/account"
 	adminauthhttp "github.com/chenyme/grok2api/backend/internal/transport/http/adminauth"
 	audithttp "github.com/chenyme/grok2api/backend/internal/transport/http/audit"
@@ -29,6 +31,7 @@ import (
 	mediahttp "github.com/chenyme/grok2api/backend/internal/transport/http/media"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	modelhttp "github.com/chenyme/grok2api/backend/internal/transport/http/model"
+	registrationhttp "github.com/chenyme/grok2api/backend/internal/transport/http/registration"
 	settingshttp "github.com/chenyme/grok2api/backend/internal/transport/http/settings"
 	systemhttp "github.com/chenyme/grok2api/backend/internal/transport/http/system"
 	"github.com/gin-gonic/gin"
@@ -66,6 +69,9 @@ type Dependencies struct {
 	QualityGuardToken      string
 	QualityGuardProbe      egressapp.QualityProbeInput
 	Updates                *updatecheckapp.Service
+	Registration           *registrationapp.Service
+	RegistrationManager    *registrationinfra.Manager
+	RegistrationToken      string
 }
 
 type ReadinessComponent struct {
@@ -165,12 +171,20 @@ func New(deps Dependencies) *gin.Engine {
 		}
 		return deps.PublicAPIBaseURL
 	}, deps.Updates).Register(adminProtected)
+	if deps.Registration != nil && deps.RegistrationManager != nil {
+		registrationhttp.NewHandler(deps.RegistrationManager, deps.Registration).RegisterAdmin(adminProtected)
+	}
 
 	if deps.QualityGuardToken != "" {
 		qualityGuardInternal := router.Group("/api/internal/v1/quality-guard")
 		qualityGuardInternal.Use(middleware.QualityGuardAuth(deps.QualityGuardToken))
 		audithttp.NewQualityGuardHandler(deps.Audits, deps.QualityGuardProbe.ClientKeyID).RegisterQualityGuard(qualityGuardInternal)
 		egressHandler.RegisterQualityGuard(qualityGuardInternal)
+	}
+	if deps.Registration != nil && deps.RegistrationManager != nil && deps.RegistrationToken != "" {
+		registrationInternal := router.Group("/api/internal/v1")
+		registrationInternal.Use(middleware.InternalBearerAuth(deps.RegistrationToken, "registrationWorkerUnauthorized", "注册 Worker 内部认证失败"))
+		registrationhttp.NewHandler(deps.RegistrationManager, deps.Registration).RegisterInternal(registrationInternal)
 	}
 
 	v1 := router.Group("/v1")

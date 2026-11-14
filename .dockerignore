@@ -29,6 +29,11 @@ backend/**/*_test.go
 !docker/
 !docker/entrypoint.sh
 
+!registration/
+!registration/**
+registration/.venv/
+registration/**/__pycache__/
+
 !tools/
 !tools/egress-quality-guard/
 !tools/egress-quality-guard/quality_guard.py

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
 	quotarecoveryapp "github.com/chenyme/grok2api/backend/internal/application/quotarecovery"
+	registrationapp "github.com/chenyme/grok2api/backend/internal/application/registration"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
@@ -38,6 +40,7 @@ import (
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
 	webprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/web"
 	infraqualityguard "github.com/chenyme/grok2api/backend/internal/infra/qualityguard"
+	registrationinfra "github.com/chenyme/grok2api/backend/internal/infra/registration"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	redisruntime "github.com/chenyme/grok2api/backend/internal/infra/runtime/redis"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
@@ -84,6 +87,7 @@ type Application struct {
 	web             *webprovider.Adapter
 	egress          *infraegress.Manager
 	egressOps       *egressapp.Service
+	registration    *registrationinfra.Manager
 	startup         *startupState
 }
 
@@ -310,6 +314,21 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	accountSyncService := accountsyncapp.NewService(logger, accountService, accountService, accountService, modelService)
 	accountSyncService.SetBulkPool(importPool)
 	accountSyncService.UpdateConcurrency(cfg.Batch.ImportConcurrency)
+	registrationService := registrationapp.NewService(accountService)
+	registrationToken, err := security.NewHexToken(32)
+	if err != nil {
+		if runtimeStore != nil {
+			_ = runtimeStore.Close()
+		}
+		database.Close()
+		return nil, fmt.Errorf("生成注册回调令牌: %w", err)
+	}
+	registrationManager := registrationinfra.New(registrationinfra.Config{
+		DataDir:       registrationDataDir(cfg),
+		Callback:      registrationCallbackURL(cfg.Server.Listen),
+		CallbackToken: registrationToken,
+		Logger:        logger,
+	})
 	egressService := egressapp.NewService(egressRepo, cipher, infraegress.DefaultUserAgent, accountRepo)
 	egressService.ConfigureAutoAssignBounds(cfg.Routing.AutoAssignMaxNodeShare, cfg.Routing.AutoAssignMaxMigrationShare)
 	egressService.SetClearanceManager(egressManager)
@@ -436,14 +455,35 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 			MaxOutputTokens: cfg.QualityGuard.MaxOutputTokens,
 		}
 	}
-	router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
+	router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService, Registration: registrationService, RegistrationManager: registrationManager, RegistrationToken: registrationToken})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	return &Application{
 		logger: logger, database: database, server: server,
 		audits: auditService, responses: responseRepo, cleanupLock: refreshLock, runtime: runtimeStore,
 		settingsBus: settingsBus, invalidationBus: invalidationBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService, invalidations: invalidationService,
-		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, egressOps: egressService, startup: startup,
+		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, egressOps: egressService, registration: registrationManager, startup: startup,
 	}, nil
+}
+
+func registrationCallbackURL(listen string) string {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(listen))
+	if err != nil || strings.TrimSpace(port) == "" {
+		port = "8000"
+	}
+	return "http://127.0.0.1:" + port + "/api/internal/v1/registration/accounts/ingest"
+}
+
+func registrationDataDir(cfg config.Config) string {
+	if value := strings.TrimSpace(os.Getenv("GROK2API_REGISTRATION_DATA_DIR")); value != "" {
+		return value
+	}
+	if cfg.Database.Driver == "sqlite" && strings.TrimSpace(cfg.Database.SQLite.Path) != "" {
+		return filepath.Join(filepath.Dir(cfg.Database.SQLite.Path), "registration")
+	}
+	if strings.TrimSpace(cfg.Media.Local.Path) != "" {
+		return filepath.Join(filepath.Dir(cfg.Media.Local.Path), "registration")
+	}
+	return filepath.Join(".", "data", "registration")
 }
 
 func invalidationSourceInstance(cfg config.Config) string {
@@ -555,6 +595,9 @@ func (a *Application) Run(ctx context.Context) error {
 		a.logger.Info("server_started", "listen", a.server.Addr)
 		errCh <- a.server.ListenAndServe()
 	}()
+	if a.registration != nil {
+		go a.registration.Start(runCtx)
+	}
 	a.reconcileStartup(runCtx)
 	startBackground := func(name string, task func(context.Context) error) {
 		background.Add(1)
@@ -808,10 +851,14 @@ func (a *Application) logPerformanceMetrics() {
 
 func (a *Application) Close() error {
 	var runtimeErr error
+	var registrationErr error
+	if a.registration != nil {
+		registrationErr = a.registration.Close()
+	}
 	if a.runtime != nil {
 		runtimeErr = a.runtime.Close()
 	}
-	return errors.Join(runtimeErr, a.database.Close())
+	return errors.Join(registrationErr, runtimeErr, a.database.Close())
 }
 
 func (a *Application) runPeriodicTask(ctx context.Context, interval time.Duration, name string, task func(context.Context) error) {

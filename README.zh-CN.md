@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/chenyme/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/DearLicy/grok2api-v2/pkgs/container/grok2api-v2"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -128,7 +128,7 @@ flowchart LR
 | :-- | :-- |
 | 接口 | Responses、Chat Completions、Anthropic Messages、Images 与异步 Videos |
 | 客户端 | Codex、Claude Code，以及 OpenAI/Anthropic 兼容 SDK |
-| 账号 | 批量导入导出、额度同步、凭据续期、转换、账号工具与清理 |
+| 账号 | 注册机、加密本地账号库、重新登录入库、批量导入导出、额度同步、凭据续期、转换、账号工具与清理 |
 | 路由 | 模型发现、Provider 限定、会话粘滞、额度/并发门禁和有界切换 |
 | 会话 | stored response、compact、Prompt Cache 亲和与可选 reasoning replay |
 | 媒体 | 图片生成与编辑、视频任务、本地归档及 URL/Base64/SSE 输出 |
@@ -150,8 +150,8 @@ flowchart LR
 官方镜像支持 `linux/amd64` 和 `linux/arm64`。
 
 ```bash
-git clone https://github.com/chenyme/grok2api.git
-cd grok2api
+git clone https://github.com/DearLicy/grok2api-v2.git
+cd grok2api-v2
 cp config.example.yaml config.yaml
 ```
 
@@ -175,8 +175,7 @@ bootstrapAdmin:
 启动服务：
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f grok2api
 ```
 
@@ -226,6 +225,19 @@ Web 账号工具支持接受协议、设置对应 20–40 岁的随机生日和�
 
 > [!TIP]
 > 从 Python 版迁移时，请将 Grok Web SSO 导出为 TXT，再导入“Grok Web”。旧数据库和号池元数据不兼容。
+
+### 内置注册机
+
+管理端“注册”页面直接管理同进程启动的注册 Worker，不需要另开服务、连接端口或重新连接后端。Worker 默认只监听随机 `127.0.0.1` 端口，并由进程级随机令牌保护；Go 主服务通过现有账号导入流水线把注册结果写入 Grok Web、Grok Build 和 Grok Console。
+
+- 只使用一个 Chromium 进程串行执行任务；每个账号创建独立无痕上下文，完成或失败后立即释放该上下文，任务结束再关闭浏览器。
+- 浏览器列表来自本机已安装的 Chrome、Edge、Brave 或 Chromium。注册机只接受可自动控制的 Chromium 浏览器，不调用系统默认浏览器。
+- 协议模式优先使用 gRPC-Web，只有明确发生在账号创建前的安全失败才会回到浏览器；结果不确定时不会重复创建账号。
+- 注册成功后依次尝试入库 Web、Build、Console。纯 HTTP Build 授权遇到浏览器校验时只回退一次浏览器 OAuth，不重放账号注册。
+- 本地账号库使用 AES-GCM 加密保存邮箱、密码和 SSO，支持 TXT、CSV、JSON 导入导出，以及按顺序逐账号重新登录并补全三个渠道。
+- 重新登录不设单次数量上限；开始前会查询 Grok2API，已有 Web、Build、Console 全部渠道的账号自动跳过。
+
+注册配置、账号库和单批次日志均保存在持久化数据目录，不会混入历史日志。Docker 首次构建会安装 Python、Chromium、Chromedriver、Xvfb 和全部 Worker 依赖，并强制使用镜像内的 Chromium；宿主机不需要安装 Chrome、Edge 或其他浏览器。宿主机源码运行时，可通过 `GROK2API_REGISTRATION_PYTHON` 指向已安装 `registration/requirements.txt` 的 Python 解释器。
 
 ## 模型与路由
 
@@ -342,12 +354,12 @@ curl http://127.0.0.1:8000/v1/responses \
 - 按作用域配置无回退、直连或固定节点
 - 代理池模式，单次连接失败不会触发全局冷却
 - 固定代理传输失败后立即复测；同节点复测自动合并，后续绑定请求限时等待并在恢复后快速重试
-- 可选的[出口质量守护程序](./tools/egress-quality-guard/README.zh-CN.md)，支持逐节点模型探测、防误杀隔离和自动恢复；通过内置的 `quality-guard` Compose profile 按需启用
+- 默认启用的[出口质量守护程序](./tools/egress-quality-guard/README.zh-CN.md)，支持逐节点模型探测、防误杀隔离和自动恢复
 - 代理用户名包含 `{account}` 的节点会被识别为租约级节点：被动审计异常只会临时移出对应的账号租约，冷却后固定使用同一账号和节点复测，复测异常会续期；若 sidecar 不可用，已到期的隔离不会继续阻断路由，避免孤儿状态永久卡住账号。共享节点始终不会因此停用，也不会暴露渲染后的代理身份。普通固定 sticky 会话仍可按独立节点管理
 
 Hysteria 与 TUIC 暂未支持。FlareSolverr 仅接受 HTTP/SOCKS 代理地址，因此自动刷新 Clearance 暂不能直接使用隧道分享链接。
 
-首次启用时只需在 `config.yaml` 中增加 `qualityGuard` 并启动 profile。主程序会自动创建并稳定复用不可导出的系统探测身份：
+质量守护随默认 Compose 栈启动。主程序会自动创建并稳定复用不可导出的系统探测身份：
 
 ```yaml
 qualityGuard:
@@ -368,17 +380,11 @@ qualityGuard:
     idleAccountCooldown: 15m
 ```
 
-`requestRetry` 在网关请求路径上生效，与 sidecar 探测/隔离相互独立。上面的示例显式开启；内置默认值和 `config.example.yaml` 均将 `enabled`、`autoDisable` 设为关闭。任一开关开启后都会启用请求内质量检测与重试。可见输出达到 `minOutputTokens` 且全程无流式 reasoning 时**不发给用户**，排除该账号再试；`autoDisable: true` 会在首次确认缺 thinking 或吞吐降智（soft/hard/burst）时直接禁用账号。管理页面的“自动停用降智账号”控制 `autoDisable`，关闭后恢复 YAML 中 `requestRetry.enabled` 的原有策略。全部仍无推理则按 `onExhausted` 返回 `503 quality_degraded` 或放出最后一枪。上下文压缩同时豁免缺 thinking 和输出速度的账号惩罚。不处理图/视频、stored response 钉账号和 ForcedEgress 探针。Grok TUI 带 tools 的回合仍会 hold，避免 0-thinking 降智流跳过闸门。
-
-```bash
-docker compose --profile quality-guard up -d --build
-```
+`requestRetry` 在网关请求路径上生效，与 sidecar 探测/隔离相互独立。上面的示例显式开启；内置默认值和 `config.example.yaml` 均将 `requestRetry.enabled` 与 `autoDisable` 设为关闭，避免在未明确选择策略时拦截请求正文。任一开关开启后都会启用请求内质量检测与重试。可见输出达到 `minOutputTokens` 且全程无流式 reasoning 时**不发给用户**，排除该账号再试；`autoDisable: true` 会在首次确认缺 thinking 或吞吐降智（soft/hard/burst）时直接禁用账号。管理页面的“自动停用降智账号”控制 `autoDisable`，关闭后恢复 YAML 中 `requestRetry.enabled` 的原有策略。全部仍无推理则按 `onExhausted` 返回 `503 quality_degraded` 或放出最后一枪。上下文压缩同时豁免缺 thinking 和输出速度的账号惩罚。不处理图/视频、stored response 钉账号和 ForcedEgress 探针。Grok TUI 带 tools 的回合仍会 hold，避免 0-thinking 降智流跳过闸门。
 
 曾使用预览版 `clientKeyID` 配置的现有部署可以直接升级：该字段会被兼容读取但不再使用，可安全删除；原来手工创建的探测 Key 不会被程序擅自删除。
 
-后续修改该配置时，执行 `docker compose --profile quality-guard restart grok2api egress-quality-guard` 使基础配置重新加载；管理页面中的策略调整仍支持热加载。
-
-普通的 `docker compose up -d` 不会启动守护程序，也不会产生主动探测流量。sidecar 只从主程序获得权限受限的内部凭据，不保存或使用管理员密码。启用自动隔离前请先阅读上面的详细说明。
+后续修改该配置时，执行 `docker compose restart grok2api egress-quality-guard` 使基础配置重新加载；管理页面中的策略调整仍支持热加载。sidecar 只从主程序获得权限受限的内部凭据，不保存或使用管理员密码。启用自动隔离前请先阅读上面的详细说明。
 
 Resin 用户名支持 `{account}`：
 
@@ -388,13 +394,7 @@ socks5h://Default.{account}:RESIN_PROXY_TOKEN@resin:2260
 
 占位符会替换为稳定的匿名身份。已关联的 Web、Build、Console 可共享该身份，不直接使用 Token 或 Email。
 
-如需自动维护 Web/Console Cloudflare Clearance：
-
-```bash
-docker compose --profile flaresolverr up -d
-```
-
-随后在 **运行设置 → 媒体与网络 → Clearance** 填写 `http://flaresolverr:8191`，并选择一种托管模式：
+Compose 默认内置 FlareSolverr，并预先将 **运行设置 → 媒体与网络 → Clearance** 指向 `http://flaresolverr:8191`：
 
 - `FlareSolverr` 按配置周期主动刷新固定出口中过期的 Clearance。
 - `按需刷新` 不按时间淘汰最后一次成功的 Clearance，只在上游明确拒绝并将其标记失效后重新求解；后台定时任务不会在该模式下启动浏览器。

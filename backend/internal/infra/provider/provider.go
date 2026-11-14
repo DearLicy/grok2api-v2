@@ -24,6 +24,10 @@ var (
 	// ErrConsoleUnlinked accompanies ErrUnauthorized for Grok Console accounts
 	// never linked to Cursor; they have no Console credit pool at all.
 	ErrConsoleUnlinked = errors.New("grok console account not linked to cursor")
+	// ErrBrowserVerificationRequired means the upstream pure-HTTP approval
+	// reached a browser-only anti-abuse check. Callers may retry that approval
+	// in a disposable browser context without replaying account registration.
+	ErrBrowserVerificationRequired = errors.New("upstream requires browser verification")
 	// ErrEgressBlocked marks a request skipped locally because its egress is
 	// in a Cloudflare block cool-down; no upstream call was made.
 	ErrEgressBlocked       = errors.New("egress blocked by cloudflare, waiting for cool-down")

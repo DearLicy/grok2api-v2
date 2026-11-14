@@ -39,6 +39,12 @@ bootstrapAdmin:
   # [必须修改] 首次启动前替换为强密码；管理员创建成功后建议删除本段。
   password: "replace-with-a-strong-password"
 
+provider:
+  web:
+    # 默认使用 Compose 内置 FlareSolverr；仅在需要时求解 Cloudflare Clearance。
+    clearanceMode: on_demand # manual | flaresolverr | on_demand
+    flareSolverrURL: "http://flaresolverr:8191"
+
 frontend:
   # [通常不要修改] Go 服务同源托管的前端构建目录。
   staticPath: "./frontend/dist"
@@ -123,10 +129,9 @@ audit:
   ledgerUnhealthyGrace: 10s
   ledgerQueueHighWatermarkPercent: 90
 
-# [按需启用] Grok Build 出口质量守护。仅配置后仍不会自动启动 sidecar；
-# 使用 docker compose --profile quality-guard up -d --build 启动。
+# [默认启用] Grok Build 出口质量守护由 Compose 自动启动。
 qualityGuard:
-  enabled: false
+  enabled: true
   # 主程序会自动创建并复用不可导出的内部探测身份，无需配置 Client Key。
   # 使用已验证会输出推理 Token 的 Build 模型时，内置恢复探针还会校验 reasoning Token。
   model: "grok-4.6"
@@ -161,7 +166,7 @@ qualityGuard:
   # account-bound state or side-effecting tools. Context compaction stays exempt.
   # Replay-safe missing-thinking requests try another account (up to
   # maxAttempts). fail_closed returns 503 instead of the held body. Sidecar
-  # qualityGuard.enabled stays false until you start the quality-guard profile.
+  # quality-guard is part of the default Compose stack.
   # Non-empty encrypted_content stubs are not thinking. The ciphertext floor
   # is max(minEncryptedBytes, reasoning_tokens * encryptedBytesPerReasoningToken).
   requestRetry:

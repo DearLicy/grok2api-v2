@@ -1,0 +1,51 @@
+ARG BASE_IMAGE=ghcr.io/chenyme/grok2api:v3.1.8
+
+FROM ${BASE_IMAGE}
+
+ENV TZ=Asia/Shanghai \
+    GROK2API_CONFIG_SOURCE=/run/grok2api/config.yaml \
+    DISPLAY=:99
+
+COPY apk-bundle /tmp/apk-bundle
+RUN apk add --no-cache --no-network --allow-untrusted /tmp/apk-bundle/*.apk && \
+    mkdir -p /app/data/registration /run/grok2api /var/lib/grok2api-quality-guard && \
+    chown -R grok2api:grok2api \
+      /app/data \
+      /run/grok2api \
+      /var/lib/grok2api-quality-guard && \
+    chmod 0700 /var/lib/grok2api-quality-guard && \
+    rm -rf /tmp/apk-bundle
+
+WORKDIR /app
+
+COPY --chmod=0755 grok2api /app/grok2api
+RUN rm -rf /app/frontend/dist
+COPY frontend-dist /app/frontend/dist
+COPY registration /app/registration
+COPY wheelhouse /tmp/wheelhouse
+RUN mkdir -p /app/registration/.venv/bin /app/registration/.venv/lib/python3.12/site-packages && \
+    ln -s /usr/bin/python3 /app/registration/.venv/bin/python && \
+    printf 'home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.12.16\n' \
+      > /app/registration/.venv/pyvenv.cfg && \
+    python3 - <<'PY'
+import glob
+import zipfile
+
+target = "/app/registration/.venv/lib/python3.12/site-packages"
+for wheel in glob.glob("/tmp/wheelhouse/*.whl"):
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(target)
+PY
+RUN rm -rf /tmp/wheelhouse && \
+    /app/registration/.venv/bin/python -c \
+      "import cryptography, curl_cffi, lxml, psutil; from DrissionPage import Chromium"
+COPY VERSION /app/VERSION
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/grok2api-entrypoint
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8000/healthz >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/grok2api-entrypoint"]
+CMD ["/app/grok2api", "--config", "/app/config.yaml", "--listen", "0.0.0.0:8000"]
